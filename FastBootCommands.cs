@@ -451,5 +451,32 @@ namespace FastBoot
 
             return true;
         }
+
+        public static bool SendOEMCommand(this FastBootTransport fastBootTransport, string command, out string commandResponse)
+        {
+            FastBootStatus status;
+            string response;
+
+            try
+            {
+                (FastBootStatus status, string response, byte[] rawResponse)[] responses = fastBootTransport.SendCommand($"oem {command}");
+                (status, response, byte[] _) = responses.Last();
+            }
+            catch
+            {
+                commandResponse = "";
+                return false;
+            }
+
+            if (status != FastBootStatus.OKAY)
+            {
+                commandResponse = response; // The OEM Command may fail with a specific response that the end user may want to see, still assign a response.
+                return false;
+            }
+
+            commandResponse = response;
+
+            return true;
+        }
     }
 }
