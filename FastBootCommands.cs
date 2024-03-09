@@ -455,16 +455,28 @@ namespace FastBoot
         public static bool SendOEMCommand(this FastBootTransport fastBootTransport, string command, out string commandResponse)
         {
             FastBootStatus status;
-            string response;
+            string response = "";
 
             try
             {
                 (FastBootStatus status, string response, byte[] rawResponse)[] responses = fastBootTransport.SendCommand($"oem {command}");
-                (status, response, byte[] _) = responses.Last();
+                (status, string _, byte[] _) = responses.Last();
+                foreach((FastBootStatus status, string response, byte[] rawResponse) responseLine in responses) 
+                {
+                    if (responseLine.response.EndsWith("\n") || responseLine.response.EndsWith("\r\n"))
+                    {
+                        response += responseLine.response;
+                    }
+                    else
+                    {
+                        response += responseLine.response + "\n";
+                    }
+                }
+                response = response.Trim(); // Trim any unnecessary whitespaces.
             }
             catch
             {
-                commandResponse = "";
+                commandResponse = response;
                 return false;
             }
 
