@@ -384,7 +384,8 @@ namespace FastBoot
             try
             {
                 (FastBootStatus status, string response, byte[] rawResponse)[] responses = fastBootTransport.SendCommand($"flashing get_unlock_ability");
-                (status, response, byte[] _) = responses.Last();
+                (FastBootStatus _, response, byte[] _) = responses.First();
+                (status, string _, byte[] _) = responses.Last();
             }
             catch
             {
