@@ -21,6 +21,7 @@
 * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 * SOFTWARE.
 */
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
@@ -151,7 +152,31 @@ namespace FastBoot
         public static bool GetAllVariables(this FastBootTransport fastBootTransport, out (string, string)[] variables)
         {
             bool result = GetAllVariables(fastBootTransport, out string[] responses);
-            variables = responses.Where(t => t.Contains(':')).Select(t => (t.Split(":")[0], string.Join(":", t.Split(":").Skip(1)))).ToArray();
+
+            // Edge cases:
+            // vendor-fingerprint
+            // system-fingerprint
+
+            List<(string, string)> variableList = new();
+
+            foreach (string response in responses.Where(t => t.Contains(':')))
+            {
+                if (response.StartsWith("vendor-fingerprint:") || response.StartsWith("system-fingerprint:"))
+                {
+                    string variableName = response.Split(":")[0];
+                    string variableValue = string.Join(":", response.Split(":").Skip(1));
+                    variableList.Add((variableName, variableValue));
+                }
+                else
+                {
+                    string variableName = response.Substring(0, response.LastIndexOf(":"));
+                    string variableValue = response.Substring(response.LastIndexOf(":") + 1);
+                    variableList.Add((variableName, variableValue));
+                }
+            }
+
+            variables = variableList.ToArray();
+
             return result;
         }
 
