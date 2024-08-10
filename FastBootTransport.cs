@@ -56,8 +56,33 @@ namespace FastBoot
 
             if (InputPipe == null || OutputPipe == null)
             {
+                USBDevice.Dispose();
                 throw new Exception("Invalid USB device!");
             }
+
+            int ControlPipeTimeout = USBDevice.ControlPipeTimeout;
+            int InputPipeTransferTimeout = InputPipe.Policy.PipeTransferTimeout;
+            int OutputPipeTransferTimeout = OutputPipe.Policy.PipeTransferTimeout;
+
+            // Allow 1s of response time.
+            USBDevice.ControlPipeTimeout = 1000;
+            InputPipe.Policy.PipeTransferTimeout = 1000;
+            OutputPipe.Policy.PipeTransferTimeout = 1000;
+
+            // Test if the device is a FastBoot device right here.
+            try
+            {
+                FastBootCommands.GetAllVariables(this, out string[] vars);
+            }
+            catch
+            {
+                USBDevice.Dispose();
+                throw new Exception("Incompatible Device!");
+            }
+
+            USBDevice.ControlPipeTimeout = ControlPipeTimeout;
+            InputPipe.Policy.PipeTransferTimeout = InputPipeTransferTimeout;
+            OutputPipe.Policy.PipeTransferTimeout= OutputPipeTransferTimeout;
         }
 
         private (FastBootStatus status, string response, byte[] rawResponse) ReadResponse()
