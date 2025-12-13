@@ -21,9 +21,12 @@
 * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 * SOFTWARE.
 */
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography.Xml;
+using static FastBoot.Sparse;
 
 namespace FastBoot
 {
@@ -264,6 +267,189 @@ namespace FastBoot
         public static bool FlashPartition(this FastBootTransport fastBootTransport, string partition, Stream stream)
         {
             FastBootStatus status;
+            uint maxDownloadSize = 0;
+            string deviceResponse;
+
+            if(!GetVariable(fastBootTransport, "max-download-size", out deviceResponse)) return false;
+            maxDownloadSize = Convert.ToUInt32(deviceResponse);
+
+            if (stream.Length > maxDownloadSize)
+            {
+                byte[] image_magic = new byte[4];
+
+                try
+                {
+                    stream.Read(image_magic, 0, 4);
+                    if(BitConverter.ToUInt32(image_magic) == Sparse.sparse_magic)
+                    {
+                        byte[] sparseFileHeaderBuffer = new byte[28];
+                        byte[] sparseChunkHeaderBuffer = new byte[12];
+                        sparseFileHeader fileHeader;
+
+                        List<byte[]> chunks = new();
+                        uint blockPosition = 0;
+                        int availableSpace;
+
+                        stream.Position = 0;
+
+                        stream.ReadExactly(sparseFileHeaderBuffer, 0, 28);
+                        fileHeader = ReadSparseFileHeader(sparseFileHeaderBuffer);
+                        availableSpace = (int)maxDownloadSize - (int)fileHeader.fileHeaderSize;
+
+                        for (int i = 0; i < fileHeader.totalChunks; i++)
+                        {
+                            stream.ReadExactly(sparseChunkHeaderBuffer, 0, 12);
+                            sparseChunkHeader chunkHeader = ReadSparseChunkHeader(sparseChunkHeaderBuffer);
+
+                            if (chunkHeader.totalSize > availableSpace && chunks.Count > 0)
+                            {
+                                sparseFileHeader newFileHeader = fileHeader;
+                                int offset = fileHeader.fileHeaderSize;
+
+                                uint padding_blocks = fileHeader.totalBlocks - blockPosition;
+                                if (padding_blocks > 0)
+                                {
+                                    sparseChunkHeader dummyChunk = new sparseChunkHeader
+                                    {
+                                        chunkType = (ushort)chunkTypes.DONT_CARE,
+                                        reserved = 0,
+                                        chunkSize = padding_blocks,
+                                        totalSize = fileHeader.chunkHeaderSize
+                                    };
+                                    chunks.Add(ChunkHeaderToBytes(dummyChunk));
+                                }
+
+                                newFileHeader.totalChunks = (uint)chunks.Count;
+
+                                byte[] fileBuffer = new byte[HeaderToBytes(newFileHeader).Length + chunks.Sum(chunk => chunk.Length)];
+                                Buffer.BlockCopy(HeaderToBytes(newFileHeader), 0, fileBuffer, 0, 28);
+
+                                foreach (byte[] chunk in chunks)
+                                {
+                                    Buffer.BlockCopy(chunk, 0, fileBuffer, offset, chunk.Length);
+                                    offset += chunk.Length;
+                                }
+
+                                using (MemoryStream ms = new MemoryStream(fileBuffer))
+                                {
+                                    try
+                                    {
+                                        (status, string _, byte[] _) = fastBootTransport.SendData(ms);
+                                    }
+                                    catch
+                                    {
+                                        return false;
+                                    }
+
+                                    if (status != FastBootStatus.OKAY)
+                                    {
+                                        return false;
+                                    }
+
+                                    try
+                                    {
+                                        (FastBootStatus status, string response, byte[] rawResponse)[] responses = fastBootTransport.SendCommand($"flash:{partition}");
+                                        (status, string _, byte[] _) = responses.Last();
+                                    }
+                                    catch
+                                    {
+                                        return false;
+                                    }
+
+                                    if (status != FastBootStatus.OKAY)
+                                    {
+                                        return false;
+                                    }
+                                }
+
+                                chunks.Clear();
+                                availableSpace = (int)maxDownloadSize - (int)fileHeader.fileHeaderSize;
+
+                                if (blockPosition > 0)
+                                {
+                                    sparseChunkHeader dummyChunk = new sparseChunkHeader
+                                    {
+                                        chunkType = (ushort)chunkTypes.DONT_CARE,
+                                        reserved = 0,
+                                        chunkSize = blockPosition,
+                                        totalSize = fileHeader.chunkHeaderSize
+                                    };
+                                    chunks.Add(ChunkHeaderToBytes(dummyChunk));
+                                    availableSpace -= fileHeader.chunkHeaderSize;
+                                }
+                            }
+
+                            byte[] chunk_data = new byte[chunkHeader.totalSize];
+                            Buffer.BlockCopy(sparseChunkHeaderBuffer, 0, chunk_data, 0, 12);
+
+                            int payload = (int)chunkHeader.totalSize - 12;
+                            stream.ReadExactly(chunk_data, 12, payload);
+
+                            chunks.Add(chunk_data);
+                            blockPosition += chunkHeader.chunkSize;
+                            availableSpace -= (int)chunkHeader.totalSize;
+                        }
+
+                        if (chunks.Count > 0)
+                        {
+                            sparseFileHeader newFileHeader = fileHeader;
+                            int offset = fileHeader.fileHeaderSize;
+
+                            newFileHeader.totalChunks = (uint)chunks.Count;
+
+                            byte[] fileBuffer = new byte[HeaderToBytes(newFileHeader).Length + chunks.Sum(chunk => chunk.Length)];
+                            Buffer.BlockCopy(HeaderToBytes(newFileHeader), 0, fileBuffer, 0, 28);
+
+                            foreach (byte[] chunk in chunks)
+                            {
+                                Buffer.BlockCopy(chunk, 0, fileBuffer, offset, chunk.Length);
+                                offset += chunk.Length;
+                            }
+
+                            using (MemoryStream ms = new MemoryStream(fileBuffer))
+                            {
+                                try
+                                {
+                                    (status, string _, byte[] _) = fastBootTransport.SendData(ms);
+                                }
+                                catch
+                                {
+                                    return false;
+                                }
+
+                                if (status != FastBootStatus.OKAY)
+                                {
+                                    return false;
+                                }
+
+                                try
+                                {
+                                    (FastBootStatus status, string response, byte[] rawResponse)[] responses = fastBootTransport.SendCommand($"flash:{partition}");
+                                    (status, string _, byte[] _) = responses.Last();
+                                }
+                                catch
+                                {
+                                    return false;
+                                }
+
+                                if (status != FastBootStatus.OKAY)
+                                {
+                                    return false;
+                                }
+                            }
+                        }
+                        return true;
+                    }
+                    else
+                    {
+                        return false; // TODO: Handle non-sparse but large images (most likely just converting them into raw chunks and sending them off).
+                    }
+                }
+                catch
+                {
+                    return false;
+                }
+            }
 
             try
             {
